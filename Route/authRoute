@@ -1,0 +1,32 @@
+// routes/authRoutes.js
+// Purpose: Handles all authentication-related endpoints — registering new
+// users, logging in/out, refreshing access tokens, and password reset flows.
+// Actual logic lives in authController; this file only maps URLs to it.
+
+const express = require('express');
+const router = express.Router();
+const authController = require('../controllers/authController');
+const { protect } = require('../middleware/authMiddleware');
+
+// Register a new user
+router.post('/signup', authController.signup);
+
+// Log in an existing user
+router.post('/login', authController.login);
+
+// Log out the current user (clears session/token)
+router.post('/logout', protect, authController.logout);
+
+// Issue a new access token using a refresh token
+router.post('/refresh-token', authController.refreshToken);
+
+// Request a password reset email
+router.post('/forgot-password', authController.forgotPassword);
+
+// Reset password using a valid reset token
+router.post('/reset-password/:token', authController.resetPassword);
+
+// Get the currently logged-in user's profile
+router.get('/me', protect, authController.getCurrentUser);
+
+module.exports = router;

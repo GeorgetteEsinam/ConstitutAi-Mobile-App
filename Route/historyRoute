@@ -1,0 +1,25 @@
+// routes/historyRoutes.js
+// Purpose: Tracks and serves a user's reading history — which articles
+// they've viewed and when. Useful for "continue reading" features and
+// feeding personalization/recommendation logic.
+
+const express = require('express');
+const router = express.Router();
+const historyController = require('../controllers/historyController');
+const { protect } = require('../middleware/authMiddleware');
+
+router.use(protect); // history is per-user, so require login
+
+// Get the current user's reading history (most recent first)
+router.get('/', historyController.getUserHistory);
+
+// Log that the user viewed a given article
+router.post('/:articleId', historyController.logArticleView);
+
+// Clear all history for the current user
+router.delete('/', historyController.clearHistory);
+
+// Remove a single entry from history
+router.delete('/:articleId', historyController.removeHistoryEntry);
+
+module.exports = router;

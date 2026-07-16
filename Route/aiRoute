@@ -1,0 +1,24 @@
+// routes/aiRoutes.js
+// Purpose: Endpoints that trigger AI-powered features — e.g. summarizing an
+// article, answering questions about it, or generating recommendations.
+// These typically call an external AI API (like the Claude API) inside the
+// controller layer.
+
+const express = require('express');
+const router = express.Router();
+const aiController = require('../controllers/aiController');
+const { protect } = require('../middleware/authMiddleware');
+
+// Summarize a given article
+router.post('/summarize/:articleId', protect, aiController.summarizeArticle);
+
+// Ask a question about an article's content
+router.post('/ask/:articleId', protect, aiController.askAboutArticle);
+
+// Get personalized article recommendations for the logged-in user
+router.get('/recommendations', protect, aiController.getRecommendations);
+
+// Generate tags/categories for an article automatically
+router.post('/auto-tag/:articleId', protect, aiController.autoTagArticle);
+
+module.exports = router;

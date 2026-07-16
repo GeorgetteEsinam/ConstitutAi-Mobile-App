@@ -1,0 +1,22 @@
+// routes/bookmarkRoutes.js
+// Purpose: Lets logged-in users save articles for later, view their saved
+// list, and remove items from it. All routes require authentication since
+// bookmarks are tied to a specific user.
+
+const express = require('express');
+const router = express.Router();
+const bookmarkController = require('../controllers/bookmarkController');
+const { protect } = require('../middleware/authMiddleware');
+
+router.use(protect); // every bookmark route needs a logged-in user
+
+// Get all bookmarks for the current user
+router.get('/', bookmarkController.getUserBookmarks);
+
+// Add an article to bookmarks
+router.post('/:articleId', bookmarkController.addBookmark);
+
+// Remove an article from bookmarks
+router.delete('/:articleId', bookmarkController.removeBookmark);
+
+module.exports = router;
