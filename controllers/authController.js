@@ -3,6 +3,8 @@
 
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const User = require('../models/User');
 
 // ── Helpers ───────────────────────────────────────────────────
 const signToken = (payload) =>
@@ -22,16 +24,14 @@ exports.signup = async (req, res) => {
             return res.status(400).json({ error: 'Name, email and password are required' });
 
         // 2. Check for duplicate email
-        // TODO: uncomment once User model is connected
-        // const existing = await User.findOne({ email });
-        // if (existing) return res.status(409).json({ error: 'Email is already registered' });
+        const existing = await User.findOne({ email });
+        if (existing) return res.status(409).json({ error: 'Email is already registered' });
 
         // 3. Hash the password
         const hashedPassword = await bcrypt.hash(password, 12);
 
         // 4. Save new user to DB
-        // TODO: const newUser = await User.create({ name, email, password: hashedPassword, role });
-        const newUser = { id: 'placeholder-id', name, email, role }; // remove once model is ready
+        const newUser = await User.create({ name, email, password: hashedPassword, role });
 
         // 5. Issue tokens
         const token = signToken({ id: newUser.id, role: newUser.role });
@@ -52,21 +52,17 @@ exports.login = async (req, res) => {
             return res.status(400).json({ error: 'Email and password are required' });
 
         // 2. Find user by email
-        // TODO: uncomment once User model is connected
-        // const user = await User.findOne({ email }).select('+password');
-        // if (!user) return res.status(401).json({ error: 'Invalid email or password' });
+        const user = await User.findOne({ email }).select('+password');
+        if (!user) return res.status(401).json({ error: 'Invalid email or password' });
 
         // 3. Verify password
-        // const isMatch = await bcrypt.compare(password, user.password);
-        // if (!isMatch) return res.status(401).json({ error: 'Invalid email or password' });
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) return res.status(401).json({ error: 'Invalid email or password' });
 
         // 4. Issue tokens
-        // const token        = signToken({ id: user._id, role: user.role });
-        // const refreshToken = signRefreshToken({ id: user._id });
-        // res.status(200).json({ token, refreshToken, user: { id: user._id, name: user.name, email, role: user.role } });
-
-        // Placeholder until User model is connected
-        res.status(200).json({ message: 'Login ready — connect your User model and uncomment the logic above' });
+        const token        = signToken({ id: user._id, role: user.role });
+        const refreshToken = signRefreshToken({ id: user._id });
+        res.status(200).json({ token, refreshToken, user: { id: user._id, name: user.name, email, role: user.role } });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -104,14 +100,16 @@ exports.forgotPassword = async (req, res) => {
         if (!email)
             return res.status(400).json({ error: 'Email is required' });
 
-        // TODO: once User model is connected:
-        // 1. const user = await User.findOne({ email });
-        // 2. if (!user) return res.status(404).json({ error: 'No account with that email' });
-        // 3. Generate a reset token: const resetToken = crypto.randomBytes(32).toString('hex');
-        // 4. Hash and save to user: user.passwordResetToken = crypto.createHash('sha256').update(resetToken).digest('hex');
-        // 5. user.passwordResetExpires = Date.now() + 10 * 60 * 1000; // 10 min
-        // 6. await user.save();
-        // 7. Send resetToken via email (e.g. Nodemailer)
+        const user = await User.findOne({ email });
+        if (!user) return res.status(404).json({ error: 'No account with that email' });
+
+        const resetToken = crypto.randomBytes(32).toString('hex');
+        user.passwordResetToken = crypto.createHash('sha256').update(resetToken).digest('hex');
+        user.passwordResetExpires = Date.now() + 10 * 60 * 1000; // 10 min
+        await user.save();
+        
+        // TODO: Send resetToken via email (e.g. Nodemailer)
+        console.log('Reset token:', resetToken); // For local testing
 
         res.status(200).json({ message: 'If that email exists, a reset link has been sent.' });
     } catch (err) {
@@ -127,17 +125,17 @@ exports.resetPassword = async (req, res) => {
         if (!token || !password)
             return res.status(400).json({ error: 'Reset token and new password are required' });
 
-        // TODO: once User model is connected:
-        // 1. Hash the incoming token and find the matching user
-        //    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
-        // 2. const user = await User.findOne({ passwordResetToken: hashedToken, passwordResetExpires: { $gt: Date.now() } });
-        // 3. if (!user) return res.status(400).json({ error: 'Token is invalid or has expired' });
-        // 4. user.password = await bcrypt.hash(password, 12);
-        // 5. user.passwordResetToken = undefined;
-        // 6. user.passwordResetExpires = undefined;
-        // 7. await user.save();
+        const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+        const user = await User.findOne({ passwordResetToken: hashedToken, passwordResetExpires: { $gt: Date.now() } });
+        
+        if (!user) return res.status(400).json({ error: 'Token is invalid or has expired' });
+        
+        user.password = await bcrypt.hash(password, 12);
+        user.passwordResetToken = undefined;
+        user.passwordResetExpires = undefined;
+        await user.save();
 
-        res.status(200).json({ message: 'Password reset ready — connect User model and uncomment logic above' });
+        res.status(200).json({ message: 'Password reset successful' });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
