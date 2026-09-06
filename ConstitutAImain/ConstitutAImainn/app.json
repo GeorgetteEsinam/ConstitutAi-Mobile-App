@@ -13,9 +13,11 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
+      "bundleIdentifier": "com.georgetteesinam.constitutai",
       "supportsTablet": true
     },
     "android": {
+      "package": "com.georgetteesinam.constitutai",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
