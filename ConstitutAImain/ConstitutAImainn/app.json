@@ -14,7 +14,10 @@
     },
     "ios": {
       "bundleIdentifier": "com.georgetteesinam.constitutai",
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.georgetteesinam.constitutai",
@@ -25,10 +28,24 @@
       "edgeToEdgeEnabled": true
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "output": "single",
+      "name": "ConstitutAI",
+      "shortName": "ConstitutAI",
+      "description": "A constitutional legal assistant for Ghana.",
+      "favicon": "./assets/icon.png",
+      "themeColor": "#0f1f3d",
+      "backgroundColor": "#e8eaed",
+      "display": "standalone",
+      "startUrl": "/",
+      "orientation": "portrait"
     },
     "plugins": [
       "expo-web-browser"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "345d5ed9-9193-409a-ad90-b813474809d2"
+      }
+    }
   }
 }
