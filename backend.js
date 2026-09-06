@@ -9,6 +9,7 @@ if (!process.env.JWT_SECRET) {
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
+const path = require('path');
 
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/project-backend';
 mongoose.connect(MONGO_URI)
@@ -31,7 +32,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // ── Health check ──────────────────────────────────────────────
-app.get('/', (req, res) => {
+app.get('/health', (req, res) => {
   res.send('Backend is running!');
 });
 
@@ -42,6 +43,14 @@ app.use('/api/ai', aiRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/bookmarks', bookmarkRoutes);
 app.use('/api/history', historyRoutes);
+
+// Serve the phone-friendly Expo web build from the same HTTPS Render service.
+const webDist = path.join(__dirname, 'ConstitutAImain', 'ConstitutAImainn', 'dist');
+app.use(express.static(webDist));
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/')) return next();
+  res.sendFile(path.join(webDist, 'index.html'));
+});
 
 // ── 404 handler (must be after all routes) ────────────────────
 app.use((req, res) => {
