@@ -55,6 +55,7 @@ app.use((err, req, res, next) => {
 });
 
 // ── Start server LAST ─────────────────────────────────────────
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server is running on http://localhost:${PORT}`);
+  console.log(`Server is reachable from Expo Go at http://172.20.10.2:${PORT}`);
 });

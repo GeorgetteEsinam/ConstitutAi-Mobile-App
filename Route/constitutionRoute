@@ -1,0 +1,7 @@
+const express = require('express');
+const router = express.Router();
+const { askConstitution } = require('../controllers/constitutioncontroller');
+
+router.post('/ask', askConstitution);
+
+module.exports = router

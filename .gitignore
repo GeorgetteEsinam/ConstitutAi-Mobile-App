@@ -1,2 +1,8 @@
-node_modules 
-.env 
+node_modules
+.env
+
+# Frontend is part of this repository; do not recurse through its backend link.
+ConstitutAImain/ConstitutAImainn/backend
+ConstitutAImain/ConstitutAImainn/node_modules
+ConstitutAImain/ConstitutAImainn/.expo
+ConstitutAImain/ConstitutAImainn.zip
