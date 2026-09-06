@@ -1,9 +1,6 @@
 // ── API Base URL ──────────────────────────────────────────────
-// Expo Go on the iPhone reaches this laptop through the phone hotspot.
-// Update this IP if Windows assigns a different hotspot address later.
-const EXPO_GO_BASE_URL = 'http://172.20.10.2:3001';
-
-export const BASE_URL = EXPO_GO_BASE_URL;
+// The backend is deployed on Render, so the app no longer depends on the laptop hotspot.
+export const BASE_URL = 'https://constitutai-mobile-app.onrender.com';
 
 export const API = {
   // Auth
