@@ -6,13 +6,15 @@ import {
   TouchableOpacity,
   FlatList,
   TextInput,
+  ActivityIndicator,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppContext } from '../context/AppContext';
-import constitutionData from '../data/constitution.json';
+import constitutionData from '../data/constitution';
 import BackButton from '../components/BackButton';
+import { useDownload } from '../utils/useDownload';
 
 const NAVY = '#0f1f3d';
 const GOLD = '#c9a84c';
@@ -45,6 +47,7 @@ export default function ArticlesScreen({ navigation, route }) {
   const { chapterId } = route.params;
   const { theme } = useAppContext();
   const [query, setQuery] = useState('');
+  const { downloading, downloadChapter } = useDownload();
 
   const chapter = useMemo(
     () => constitutionData.chapters.find((c) => c.id === chapterId),
@@ -104,6 +107,24 @@ export default function ArticlesScreen({ navigation, route }) {
         <Text style={[styles.countText, { color: theme.subText }]}>
           {filtered.length} article{filtered.length !== 1 ? 's' : ''}
         </Text>
+        {chapter && (
+          <TouchableOpacity
+            style={styles.downloadBtn}
+            onPress={() => downloadChapter(chapter)}
+            disabled={downloading}
+            accessibilityLabel="Download full chapter"
+            accessibilityRole="button"
+          >
+            {downloading ? (
+              <ActivityIndicator size="small" color={NAVY} />
+            ) : (
+              <Ionicons name="download-outline" size={16} color={NAVY} />
+            )}
+            <Text style={styles.downloadBtnText}>
+              {downloading ? 'Downloading…' : 'Download Chapter'}
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       <FlatList
@@ -167,11 +188,24 @@ const styles = StyleSheet.create({
   },
   searchInput: { flex: 1, color: '#fff', fontSize: 14, padding: 0 },
   countBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderBottomWidth: 1,
   },
   countText: { fontSize: 12, fontWeight: '600' },
+  downloadBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: GOLD,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  downloadBtnText: { color: NAVY, fontSize: 12, fontWeight: '700' },
   list: { paddingBottom: 24 },
   row: {
     flexDirection: 'row',

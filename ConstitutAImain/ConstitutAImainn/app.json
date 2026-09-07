@@ -31,13 +31,18 @@
       "output": "single",
       "name": "ConstitutAI",
       "shortName": "ConstitutAI",
-      "description": "A constitutional legal assistant for Ghana.",
+      "description": "Ghana Constitution 1992 — AI-powered legal assistant.",
       "favicon": "./assets/App-logo.png",
       "themeColor": "#0f1f3d",
-      "backgroundColor": "#e8eaed",
+      "backgroundColor": "#0f1f3d",
       "display": "standalone",
       "startUrl": "/",
-      "orientation": "portrait"
+      "orientation": "portrait",
+      "splash": {
+        "image": "./assets/splash-icon.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#0f1f3d"
+      }
     },
     "plugins": [
       "expo-web-browser"

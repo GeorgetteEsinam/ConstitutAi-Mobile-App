@@ -14,9 +14,10 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppContext } from '../context/AppContext';
-import constitutionData from '../data/constitution.json';
+import constitutionData from '../data/constitution';
 import { summarizeArticle, autoTagArticle } from '../services/api';
 import BackButton from '../components/BackButton';
+import { useDownload } from '../utils/useDownload';
 
 const NAVY = '#0f1f3d';
 const GOLD = '#c9a84c';
@@ -34,6 +35,7 @@ function showFeedback(message) {
 export default function ArticleDetailScreen({ navigation, route }) {
   const { articleId, chapterId } = route.params;
   const { theme, savedArticles, toggleSavedArticle, logArticleView, authToken } = useAppContext();
+  const { downloading, downloadArticle } = useDownload();
   const [summary, setSummary] = useState('');
   const [summaryError, setSummaryError] = useState('');
   const [summarizing, setSummarizing] = useState(false);
@@ -181,6 +183,21 @@ export default function ArticleDetailScreen({ navigation, route }) {
               size={22}
               color={isSaved ? GOLD : '#fff'}
             />
+          </TouchableOpacity>
+
+          {/* Download button */}
+          <TouchableOpacity
+            style={styles.bookmarkBtn}
+            onPress={() => downloadArticle(article, chapter ? chapter.title : '')}
+            disabled={downloading}
+            accessibilityLabel="Download this article"
+            accessibilityRole="button"
+          >
+            {downloading ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Ionicons name="download-outline" size={22} color="#fff" />
+            )}
           </TouchableOpacity>
         </View>
       </SafeAreaView>
