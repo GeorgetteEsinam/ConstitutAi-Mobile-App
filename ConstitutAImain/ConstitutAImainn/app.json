@@ -4,7 +4,7 @@
     "slug": "ConstitutAImain",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/App-logo.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
@@ -32,7 +32,7 @@
       "name": "ConstitutAI",
       "shortName": "ConstitutAI",
       "description": "A constitutional legal assistant for Ghana.",
-      "favicon": "./assets/icon.png",
+      "favicon": "./assets/App-logo.png",
       "themeColor": "#0f1f3d",
       "backgroundColor": "#e8eaed",
       "display": "standalone",

@@ -1,12 +1,12 @@
-{
+﻿{
   "name": "ConstitutAI",
   "short_name": "ConstitutAI",
   "description": "A constitutional legal assistant for Ghana.",
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "theme_color": "#0f1f3d",
   "background_color": "#e8eaed",
+  "theme_color": "#0f1f3d",
   "icons": [
     {
       "src": "/apple-touch-icon.png",
