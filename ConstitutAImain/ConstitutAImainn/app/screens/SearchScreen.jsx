@@ -12,7 +12,7 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppContext } from '../context/AppContext';
-import constitutionData from '../data/constitution.json';
+import constitutionData from '../data/constitution';
 import BackButton from '../components/BackButton';
 
 const NAVY = '#0f1f3d';

@@ -114,7 +114,7 @@ export default function DashboardScreen({ navigation }) {
 
         {/* Feature grid */}
         <View style={styles.grid}>
-          <FeatureCard iconBg="#ede9fb" title="Ask AI" subtitle="Ask a question" onPress={() => navigation.navigate('AskAI')} theme={theme}>
+          <FeatureCard iconBg="#ede9fb" title="Ask AI" subtitle="Ask or upload cases" onPress={() => navigation.navigate('AskAI')} theme={theme}>
             <MaterialCommunityIcons name="robot-outline" size={24} color={PURPLE} />
           </FeatureCard>
 

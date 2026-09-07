@@ -4,6 +4,7 @@
 // When your group member deploys the server, replace BASE_URL with the
 // live URL he gives you, e.g. 'https://constitutai-backend.onrender.com'
 // ─────────────────────────────────────────────────────────────────────────────
+import { Platform } from 'react-native';
 import { BASE_URL as APP_BASE_URL } from '../config/api';
 
 export const BASE_URL = APP_BASE_URL;
@@ -149,7 +150,56 @@ export const summarizeArticle = ({ articleId, title, content }, token) => {
 };
 
 /**
- * POST /api/ai/auto-tag or POST /api/ai/auto-tag/:articleId
+ * POST /api/ai/analyze-file
+ * Uploads a file (PDF/TXT/DOC) and gets a constitutional analysis from Claude.
+ * Uses FormData — does NOT go through the JSON request() helper.
+ */
+export const analyzeFile = async ({ file, question }, token) => {
+  const formData = new FormData();
+
+  if (Platform.OS === 'web') {
+    // Web: Browser FormData requires a real File or Blob object
+    if (file.file) {
+      formData.append('file', file.file, file.name);
+    } else if (file.uri) {
+      try {
+        const response = await fetch(file.uri);
+        const blob = await response.blob();
+        formData.append('file', blob, file.name);
+      } catch (blobErr) {
+        formData.append('file', new Blob([file.uri], { type: file.mimeType || 'text/plain' }), file.name);
+      }
+    }
+  } else {
+    // Native mobile format
+    formData.append('file', {
+      uri: file.uri,
+      name: file.name,
+      type: file.mimeType || 'application/octet-stream',
+    });
+  }
+
+  if (question) {
+    formData.append('question', question);
+  }
+
+  const res = await fetch(`${BASE_URL}/api/ai/analyze-file`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      // Do NOT set Content-Type — fetch sets it automatically with boundary for FormData
+    },
+    body: formData,
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || `Request failed (${res.status})`);
+  }
+  return data;
+};
+
+/**
  * Sends article title/text from constitution.json so Mongo is not required.
  */
 export const autoTagArticle = ({ articleId, title, content }, token) => {

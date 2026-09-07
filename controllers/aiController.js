@@ -1,5 +1,5 @@
 // controllers/aiController.js
-// AI-powered features: summarise, Q&A, recommendations, auto-tagging.
+// AI-powered features: summarise, Q&A, recommendations, auto-tagging, file analysis.
 //
 // Uses the Anthropic API. Add your key to .env as:
 //   ANTHROPIC_API_KEY=sk-ant-...
@@ -8,6 +8,7 @@
 const Article = require('../models/Article');
 const History = require('../models/History');
 const { findRelevantArticles, toSource } = require('../utils/constitutionSearch');
+const pdfParse = require('pdf-parse');
  
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const MODEL = 'claude-sonnet-4-6';
@@ -247,6 +248,101 @@ function parseTags(raw) {
         })
         .slice(0, 6);
 }
+
+// ── File Analysis ─────────────────────────────────────────────
+// Extracts text from an uploaded file (PDF or plain text) and asks
+// Claude to compare/analyse it against the Ghana Constitution (1992).
+
+async function extractTextFromFile(file) {
+  const mime = (file.mimetype || '').toLowerCase();
+  const originalName = (file.originalname || '').toLowerCase();
+  const buffer = file.buffer;
+
+  if (mime === 'application/pdf' || originalName.endsWith('.pdf')) {
+    try {
+      if (pdfParse && pdfParse.PDFParse) {
+        const parser = new pdfParse.PDFParse({ data: buffer });
+        const result = await parser.getText();
+        if (typeof parser.destroy === 'function') {
+          await parser.destroy().catch(() => {});
+        }
+        return (result && result.text ? result.text : '').trim();
+      } else if (typeof pdfParse === 'function') {
+        const result = await pdfParse(buffer);
+        return (result && result.text ? result.text : '').trim();
+      }
+    } catch (pdfErr) {
+      console.error('PDF parsing error:', pdfErr);
+      throw new Error('Could not read PDF content. Please ensure the file is an uncorrupted PDF document.');
+    }
+  }
+
+  // Plain text / Markdown / Text files
+  try {
+    const text = buffer.toString('utf-8').trim();
+    return text;
+  } catch (err) {
+    throw new Error('Could not read text file encoding.');
+  }
+}
+
+exports.analyzeFile = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file was uploaded.' });
+    }
+
+    const { question } = req.body;
+    const fileText = await extractTextFromFile(req.file);
+
+    if (!fileText || fileText.length < 10) {
+      return res.status(400).json({
+        error: 'Could not extract readable text from the uploaded file. Please upload a standard text or PDF document.',
+      });
+    }
+
+    // Truncate to ~14 000 chars to stay within token limits
+    const truncated = fileText.length > 14000
+      ? fileText.slice(0, 14000) + '\n\n[... document truncated for constitutional analysis ...]'
+      : fileText;
+
+    const userQuestion = question && String(question).trim()
+      ? String(question).trim()
+      : 'Analyze this case or legal document and compare it with the Constitution of the Republic of Ghana (1992). Cite specific articles where relevant.';
+
+    const prompt = [
+      'You are Constitut AI, a specialised legal assistant for the Constitution of the Republic of Ghana (1992).',
+      'A user has uploaded a case file or legal document. Provide a comprehensive, well-structured constitutional assessment with the following clearly labeled sections:',
+      '',
+      '1. 📋 BRIEF SUMMARY OF DOCUMENT: Key legal facts, parties, claims, or subject matter.',
+      '2. 🏛️ RELEVANT CONSTITUTIONAL PROVISIONS: Specific articles of the Ghana Constitution 1992 that apply (e.g. Chapter 5 Fundamental Human Rights, Police, Judiciary, Legislature, etc.). Always cite specific Article numbers.',
+      '3. ⚖️ CONSTITUTIONAL COMPARISON & ANALYSIS: How the case aligns with, departs from, or conflicts with the 1992 Constitution.',
+      '4. 🛡️ RIGHTS & PROTECTIONS / POTENTIAL VIOLATIONS: Highlight any constitutional guarantees at stake or potential violations.',
+      '5. 📌 KEY TAKEAWAYS: Objective conclusion and legal takeaways (educational and informational; not formal legal counsel).',
+      '',
+      '── UPLOADED DOCUMENT CONTENT ──',
+      truncated,
+      '── END OF DOCUMENT ──',
+      '',
+      `User Question / Focus: ${userQuestion}`,
+    ].join('\n');
+
+    const analysis = await callClaude(prompt);
+
+    // Pull relevant constitution articles based on the file content and query
+    const keywords = userQuestion + ' ' + fileText.slice(0, 600);
+    const sources = findRelevantArticles(keywords).map(toSource);
+
+    res.status(200).json({
+      filename: req.file.originalname,
+      analysis,
+      sources,
+    });
+  } catch (err) {
+    console.error('File analysis error:', err);
+    res.status(err.status || 500).json({ error: err.message || 'Error analyzing file.' });
+  }
+};
 
 exports.autoTagArticle = async (req, res) => {
     try {

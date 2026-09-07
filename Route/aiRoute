@@ -1,13 +1,28 @@
 // routes/aiRoutes.js
-// Purpose: Endpoints that trigger AI-powered features — e.g. summarizing an
-// article, answering questions about it, or generating recommendations.
-// These typically call an external AI API (like the Claude API) inside the
-// controller layer.
-
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
 const aiController = require('../controllers/aiController');
 const { protect } = require('../middleware/authMiddleware');
+
+// Multer — store file in memory (no disk writes needed, we parse on the fly)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB max
+  fileFilter: (req, file, cb) => {
+    const allowed = [
+      'application/pdf',
+      'text/plain',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ];
+    if (allowed.includes(file.mimetype) || file.originalname.match(/\.(pdf|txt|doc|docx)$/i)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only PDF, TXT, DOC and DOCX files are allowed.'));
+    }
+  },
+});
 
 // Summarize a given article (body may include title/content from the app)
 router.post('/summarize', protect, aiController.summarizeArticle);
@@ -24,4 +39,21 @@ router.get('/recommendations', protect, aiController.getRecommendations);
 router.post('/auto-tag', protect, aiController.autoTagArticle);
 router.post('/auto-tag/:articleId', protect, aiController.autoTagArticle);
 
-module.exports = router;
+// Upload and analyse a case file against the Constitution
+const handleUpload = (req, res, next) => {
+  upload.single('file')(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: 'File is too large. Maximum allowed size is 10 MB.' });
+      }
+      return res.status(400).json({ error: `Upload error: ${err.message}` });
+    } else if (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    next();
+  });
+};
+
+router.post('/analyze-file', protect, handleUpload, aiController.analyzeFile);
+
+module.exports = router;

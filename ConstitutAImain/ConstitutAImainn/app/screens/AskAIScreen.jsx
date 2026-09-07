@@ -5,77 +5,154 @@ import {
   StyleSheet,
   TouchableOpacity,
   FlatList,
+  ScrollView,
   TextInput,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import * as DocumentPicker from 'expo-document-picker';
 import { useAppContext } from '../context/AppContext';
-import { askAI } from '../services/api';
+import { askAI, analyzeFile } from '../services/api';
 import BackButton from '../components/BackButton';
 
 const PURPLE = '#4a3fa0';
+const NAVY = '#0f1f3d';
+const GOLD = '#c9a84c';
+
+// Allowed file types
+const ALLOWED_TYPES = [
+  'application/pdf',
+  'text/plain',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+];
+
+function formatFileSize(bytes) {
+  if (!bytes || bytes <= 0) return '';
+  const mb = bytes / (1024 * 1024);
+  if (mb >= 1) return `${mb.toFixed(1)} MB`;
+  const kb = bytes / 1024;
+  return `${Math.round(kb)} KB`;
+}
 
 export default function AskAIScreen({ navigation, route }) {
   const { theme, incrementQuestions, authToken } = useAppContext();
-  const articleId = route.params?.articleId;
+  const articleId   = route.params?.articleId;
   const articleTitle = route.params?.articleTitle;
-  const articleText = route.params?.articleText;
+  const articleText  = route.params?.articleText;
   const articleNumber = route.params?.articleNumber;
-  const chapterTitle = route.params?.chapterTitle;
+  const chapterTitle  = route.params?.chapterTitle;
 
-  const [input, setInput] = useState('');
-  const [messages, setMessages] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [input, setInput]               = useState('');
+  const [messages, setMessages]         = useState([]);
+  const [loading, setLoading]           = useState(false);
+  const [loadingStatus, setLoadingStatus] = useState('');
+  const [attachedFile, setAttachedFile] = useState(null); // { uri, name, mimeType, size, file }
   const flatListRef = useRef(null);
 
   const hasArticle = Boolean(articleText);
 
-  const sendMessage = async () => {
-    const text = input.trim();
-    if (!text || loading) return;
+  // ── Pick a file ─────────────────────────────────────────────
+  const pickFile = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: Platform.OS === 'web'
+          ? ['application/pdf', 'text/plain', '.pdf', '.txt', '.doc', '.docx', '*/*']
+          : ALLOWED_TYPES,
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
 
-    const userMsg = { id: Date.now().toString(), role: 'user', text };
-    setMessages((prev) => [...prev, userMsg]);
-    setInput('');
+      if (result.canceled) return;
+
+      const asset = result.assets?.[0];
+      if (!asset) return;
+
+      // 10 MB guard on the client side
+      if (asset.size && asset.size > 10 * 1024 * 1024) {
+        Alert.alert('File too large', 'Please upload a file smaller than 10 MB.');
+        return;
+      }
+
+      setAttachedFile({
+        uri: asset.uri,
+        name: asset.name || 'case_document',
+        mimeType: asset.mimeType,
+        size: asset.size,
+        file: asset.file,
+      });
+    } catch (err) {
+      Alert.alert('Error', err.message || 'Could not pick a file.');
+    }
+  };
+
+  const removeAttachment = () => setAttachedFile(null);
+
+  const handleQuickPrompt = (promptText) => {
+    setInput(promptText);
+  };
+
+  // ── Send message or analyse file ────────────────────────────
+  const sendMessage = async (overrideText) => {
+    const text = (typeof overrideText === 'string' ? overrideText : input).trim();
+    if (!text && !attachedFile) return;
+    if (loading) return;
 
     if (!authToken) {
       setMessages((prev) => [
         ...prev,
-        {
-          id: `${Date.now()}-auth`,
-          role: 'ai',
-          text: 'Please log in to ask Constitut AI a question.',
-        },
+        { id: `${Date.now()}-auth`, role: 'ai', text: 'Please log in to use Constitut AI.' },
       ]);
       return;
     }
 
+    const fileToSend = attachedFile;
+    const isFileMode = Boolean(fileToSend);
+
+    // Build the user bubble label
+    const userBubbleText = fileToSend
+      ? `📎 ${fileToSend.name}${fileToSend.size ? ` (${formatFileSize(fileToSend.size)})` : ''}${text ? `\n\n${text}` : ''}`
+      : text;
+
+    const userMsg = { id: Date.now().toString(), role: 'user', text: userBubbleText };
+    setMessages((prev) => [...prev, userMsg]);
+    setInput('');
+    setAttachedFile(null);
+
     setLoading(true);
+    setLoadingStatus(
+      isFileMode
+        ? 'Analyzing case file against Ghana Constitution (1992)...'
+        : 'Consulting the Constitution...'
+    );
 
     try {
-      const data = await askAI(
-        {
-          question: text,
-          articleId,
-          title: articleTitle,
-          content: articleText,
-        },
-        authToken
-      );
+      let answer, sources;
+
+      if (fileToSend) {
+        // ── File analysis mode ──────────────────────────────
+        const data = await analyzeFile({ file: fileToSend, question: text || '' }, authToken);
+        answer  = data.analysis;
+        sources = data.sources || [];
+      } else {
+        // ── Regular Q&A mode ────────────────────────────────
+        const data = await askAI(
+          { question: text, articleId, title: articleTitle, content: articleText },
+          authToken
+        );
+        answer  = data.answer || 'No response from AI.';
+        sources = data.sources || [];
+      }
 
       incrementQuestions();
       setMessages((prev) => [
         ...prev,
-        {
-          id: `${Date.now()}-ai`,
-          role: 'ai',
-          text: data.answer || 'No response from AI.',
-          sources: data.sources || [],
-        },
+        { id: `${Date.now()}-ai`, role: 'ai', text: answer, sources },
       ]);
     } catch (err) {
       setMessages((prev) => [
@@ -83,20 +160,21 @@ export default function AskAIScreen({ navigation, route }) {
         {
           id: `${Date.now()}-err`,
           role: 'ai',
-          text:
-            err.message ||
-            'Could not reach the server. Make sure the backend is running and you are logged in.',
+          text: err.message || 'Could not reach the server. Please try again.',
         },
       ]);
     } finally {
       setLoading(false);
+      setLoadingStatus('');
       flatListRef.current?.scrollToEnd({ animated: true });
     }
   };
 
+  // ── Render a single message bubble ──────────────────────────
   const renderMessage = ({ item }) => {
     const isUser = item.role === 'user';
     const sources = !isUser && Array.isArray(item.sources) ? item.sources : [];
+
     return (
       <View style={[styles.msgRow, isUser && styles.msgRowUser]}>
         {!isUser && (
@@ -117,7 +195,8 @@ export default function AskAIScreen({ navigation, route }) {
               {item.text}
             </Text>
           </View>
-          {sources.length > 0 ? (
+
+          {sources.length > 0 && (
             <View style={styles.sourcesWrap}>
               {sources.map((source) => (
                 <TouchableOpacity
@@ -136,12 +215,13 @@ export default function AskAIScreen({ navigation, route }) {
                 </TouchableOpacity>
               ))}
             </View>
-          ) : null}
+          )}
         </View>
       </View>
     );
   };
 
+  // ── Render ──────────────────────────────────────────────────
   return (
     <View style={[styles.container, { backgroundColor: theme.bg }]}>
       <StatusBar style="light" />
@@ -156,13 +236,10 @@ export default function AskAIScreen({ navigation, route }) {
             <Text style={styles.headerTitle}>Constitut AI</Text>
             {hasArticle ? (
               <Text style={styles.headerSub} numberOfLines={1}>
-                {articleNumber ? `Art. ${articleNumber} · ` : ''}
-                {articleTitle}
+                {articleNumber ? `Art. ${articleNumber} · ` : ''}{articleTitle}
               </Text>
             ) : (
-              <Text style={styles.headerSub} numberOfLines={1}>
-                Grounded in the Constitution
-              </Text>
+              <Text style={styles.headerSub}>Grounded in the Constitution</Text>
             )}
           </View>
         </View>
@@ -173,6 +250,7 @@ export default function AskAIScreen({ navigation, route }) {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={0}
       >
+        {/* Message list */}
         <FlatList
           ref={flatListRef}
           data={messages}
@@ -194,8 +272,31 @@ export default function AskAIScreen({ navigation, route }) {
               <Text style={[styles.emptySub, { color: theme.subText }]}>
                 {hasArticle
                   ? chapterTitle || articleTitle
-                  : "Answers are drawn from Ghana's Constitution"}
+                  : "Ask a question or upload a case file to compare with Ghana's Constitution"}
               </Text>
+
+              {/* Upload hint card */}
+              {!hasArticle && (
+                <TouchableOpacity
+                  style={[styles.uploadHintCard, { backgroundColor: theme.card }]}
+                  onPress={pickFile}
+                  accessibilityRole="button"
+                  accessibilityLabel="Upload a case file"
+                >
+                  <View style={styles.uploadHintIconWrap}>
+                    <Ionicons name="cloud-upload-outline" size={24} color={PURPLE} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.uploadHintTitle, { color: theme.text }]}>
+                      Upload a case file
+                    </Text>
+                    <Text style={[styles.uploadHintSub, { color: theme.subText }]}>
+                      PDF or TXT · Compare against 1992 Ghana Constitution
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={theme.subText} />
+                </TouchableOpacity>
+              )}
             </View>
           }
           ListFooterComponent={
@@ -204,8 +305,11 @@ export default function AskAIScreen({ navigation, route }) {
                 <View style={styles.aiBubbleIcon}>
                   <MaterialCommunityIcons name="robot-outline" size={16} color="#fff" />
                 </View>
-                <View style={[styles.bubble, styles.bubbleAI, { backgroundColor: theme.card }]}>
+                <View style={[styles.bubble, styles.bubbleAI, styles.loadingBubble, { backgroundColor: theme.card }]}>
                   <ActivityIndicator size="small" color={PURPLE} />
+                  <Text style={[styles.loadingStatusText, { color: theme.subText }]}>
+                    {loadingStatus || 'Consulting Constitution...'}
+                  </Text>
                 </View>
               </View>
             ) : null
@@ -216,31 +320,112 @@ export default function AskAIScreen({ navigation, route }) {
           }
         />
 
+        {/* Attached file chip & Quick prompt suggestions */}
+        {attachedFile && (
+          <View style={{ backgroundColor: theme.card, borderTopWidth: 1, borderTopColor: theme.border }}>
+            <View style={styles.attachmentBar}>
+              <View style={styles.attachmentBadge}>
+                <Ionicons name="document-attach-outline" size={16} color={PURPLE} />
+              </View>
+              <Text style={[styles.attachmentName, { color: theme.text }]} numberOfLines={1}>
+                {attachedFile.name}
+                {attachedFile.size ? `  •  ${formatFileSize(attachedFile.size)}` : ''}
+              </Text>
+              <TouchableOpacity
+                onPress={removeAttachment}
+                accessibilityLabel="Remove attachment"
+                accessibilityRole="button"
+              >
+                <Ionicons name="close-circle" size={20} color={theme.subText} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Quick analysis prompts */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.quickPromptRow}
+            >
+              {[
+                '⚖️ Compare with Constitution',
+                '🛡️ Check Rights & Violations',
+                '📋 Summarize Key Issues',
+                '📜 Cite Relevant Articles',
+              ].map((prompt, idx) => (
+                <TouchableOpacity
+                  key={idx}
+                  style={[styles.quickPromptChip, { backgroundColor: theme.bg, borderColor: theme.border }]}
+                  onPress={() => handleQuickPrompt(prompt)}
+                  accessibilityRole="button"
+                  accessibilityLabel={prompt}
+                >
+                  <Text style={[styles.quickPromptText, { color: theme.text }]}>{prompt}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        )}
+
+        {/* Input bar */}
         <View style={[styles.inputBar, { backgroundColor: theme.card, borderTopColor: theme.border }]}>
+
+          {/* Attach button */}
+          <TouchableOpacity
+            style={[styles.attachBtn, { backgroundColor: attachedFile ? PURPLE : theme.bg, borderColor: theme.border }]}
+            onPress={pickFile}
+            disabled={loading}
+            accessibilityRole="button"
+            accessibilityLabel="Attach a file"
+          >
+            <Ionicons
+              name={attachedFile ? "document-text" : "attach"}
+              size={20}
+              color={attachedFile ? '#fff' : theme.subText}
+            />
+          </TouchableOpacity>
+
           <TextInput
             style={[styles.input, { backgroundColor: theme.bg, color: theme.text, borderColor: theme.border }]}
             value={input}
             onChangeText={setInput}
-            placeholder={hasArticle ? 'Ask about this article' : 'Ask anything'}
+            placeholder={
+              attachedFile
+                ? 'Ask about this case file...'
+                : hasArticle
+                  ? 'Ask about this article'
+                  : 'Ask anything or upload a case file'
+            }
             placeholderTextColor={theme.subText}
             multiline
             editable={!loading}
             returnKeyType="send"
-            onSubmitEditing={sendMessage}
+            onSubmitEditing={() => sendMessage()}
             accessibilityLabel="Ask a question"
           />
+
+          {/* Send button */}
           <TouchableOpacity
-            style={[styles.micBtn, { backgroundColor: PURPLE, opacity: loading ? 0.6 : 1 }]}
-            onPress={sendMessage}
-            disabled={loading}
-            accessibilityLabel={input.trim() ? 'Send message' : 'Voice input'}
+            style={[
+              styles.sendBtn,
+              {
+                backgroundColor: (input.trim() || attachedFile) ? PURPLE : theme.border,
+                opacity: loading ? 0.6 : 1,
+              },
+            ]}
+            onPress={() => sendMessage()}
+            disabled={loading || (!input.trim() && !attachedFile)}
+            accessibilityLabel="Send message"
             accessibilityRole="button"
           >
-            <Ionicons
-              name={input.trim() ? 'send' : 'mic'}
-              size={20}
-              color="#fff"
-            />
+            {loading ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Ionicons
+                name={attachedFile ? 'cloud-upload-outline' : input.trim() ? 'send' : 'send'}
+                size={20}
+                color="#fff"
+              />
+            )}
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -252,14 +437,6 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   header: { paddingHorizontal: 20, paddingBottom: 16 },
   headerRow: { flexDirection: 'row', alignItems: 'center', paddingTop: 16, gap: 12 },
-  backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   headerIconWrap: {
     width: 36,
     height: 36,
@@ -270,9 +447,10 @@ const styles = StyleSheet.create({
   },
   headerTitle: { color: '#fff', fontSize: 18, fontWeight: '700' },
   headerSub: { color: '#c5d0ea', fontSize: 12, marginTop: 2 },
+
   messageList: { padding: 16, gap: 12, paddingBottom: 8 },
   messageListEmpty: { flex: 1, justifyContent: 'center' },
-  emptyWrap: { alignItems: 'center', gap: 10 },
+  emptyWrap: { alignItems: 'center', gap: 12, paddingHorizontal: 24 },
   emptyIcon: {
     width: 80,
     height: 80,
@@ -280,10 +458,34 @@ const styles = StyleSheet.create({
     backgroundColor: '#ede9fb',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 8,
+    marginBottom: 4,
   },
-  emptyTitle: { fontSize: 18, fontWeight: '700' },
-  emptySub: { fontSize: 14, textAlign: 'center', paddingHorizontal: 24 },
+  emptyTitle: { fontSize: 18, fontWeight: '700', textAlign: 'center' },
+  emptySub: { fontSize: 14, textAlign: 'center' },
+
+  uploadHintCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderWidth: 1.5,
+    borderColor: PURPLE,
+    borderStyle: 'dashed',
+    borderRadius: 14,
+    padding: 16,
+    marginTop: 8,
+    width: '100%',
+  },
+  uploadHintIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#ede9fb',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  uploadHintTitle: { fontSize: 14, fontWeight: '700', marginBottom: 2 },
+  uploadHintSub: { fontSize: 12 },
+
   msgRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginBottom: 10 },
   msgRowUser: { flexDirection: 'row-reverse' },
   bubbleCol: { maxWidth: '78%' },
@@ -295,54 +497,83 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  bubble: {
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
+  bubble: { borderRadius: 16, paddingHorizontal: 14, paddingVertical: 10 },
   bubbleUser: { borderBottomRightRadius: 4 },
   bubbleAI: { borderBottomLeftRadius: 4 },
+  loadingBubble: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  loadingStatusText: { fontSize: 13, fontStyle: 'italic' },
   bubbleText: { fontSize: 14, lineHeight: 21 },
-  sourcesWrap: {
+  sourcesWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+  sourcesHeader: { width: '100%', fontSize: 11, fontWeight: '600', marginBottom: 2 },
+  sourceChip: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 },
+  sourceChipText: { color: PURPLE, fontSize: 12, fontWeight: '700' },
+
+  attachmentBar: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginTop: 8,
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    gap: 10,
   },
-  sourceChip: {
+  attachmentBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: '#ede9fb',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  attachmentName: { flex: 1, fontSize: 13, fontWeight: '600' },
+
+  quickPromptRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingBottom: 10,
+  },
+  quickPromptChip: {
     borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
   },
-  sourceChipText: {
-    color: PURPLE,
+  quickPromptText: {
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '600',
   },
+
   inputBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
     paddingBottom: 28,
-    gap: 10,
+    gap: 8,
     borderTopWidth: 1,
+  },
+  attachBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   input: {
     flex: 1,
     fontSize: 15,
     maxHeight: 100,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 24,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 22,
     borderWidth: 1,
   },
-  micBtn: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+  sendBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
   },
 });
+
