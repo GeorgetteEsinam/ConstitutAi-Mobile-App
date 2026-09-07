@@ -154,33 +154,82 @@ export const summarizeArticle = ({ articleId, title, content }, token) => {
  * Uploads a file (PDF/TXT/DOC) and gets a constitutional analysis from Claude.
  * Uses FormData — does NOT go through the JSON request() helper.
  */
+const readBlobAsBase64 = (blob) =>
+  new Promise((resolve, reject) => {
+    if (typeof FileReader === 'undefined') return resolve(null);
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(blob);
+  });
+
 export const analyzeFile = async ({ file, question }, token) => {
   const formData = new FormData();
+  const fileName = file.name || 'case_document.pdf';
+  const fileMime = file.mimeType || 'application/pdf';
+
+  formData.append('fileName', fileName);
+  formData.append('fileMime', fileMime);
+
+  if (file.text && file.text.trim()) {
+    formData.append('fileText', file.text.trim());
+  }
+
+  if (file.base64) {
+    formData.append('fileBase64', file.base64);
+  }
 
   if (Platform.OS === 'web') {
     // Web: Browser FormData requires a real File or Blob object
     if (file.file) {
-      formData.append('file', file.file, file.name);
+      formData.append('file', file.file, fileName);
+      if (!file.base64) {
+        try {
+          const b64 = await readBlobAsBase64(file.file);
+          if (b64) formData.append('fileBase64', b64);
+        } catch (_) {}
+      }
+    } else if (file.uri && file.uri.startsWith('data:')) {
+      try {
+        const parts = file.uri.split(',');
+        const mimeMatch = parts[0].match(/:(.*?);/);
+        const mime = mimeMatch ? mimeMatch[1] : fileMime;
+        const byteCharacters = atob(parts[1]);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: mime });
+        formData.append('file', blob, fileName);
+        formData.append('fileBase64', file.uri);
+      } catch (e) {
+        console.error('Data URI decode error:', e);
+      }
     } else if (file.uri) {
       try {
         const response = await fetch(file.uri);
         const blob = await response.blob();
-        formData.append('file', blob, file.name);
+        formData.append('file', blob, fileName);
+        if (!file.base64) {
+          const b64 = await readBlobAsBase64(blob);
+          if (b64) formData.append('fileBase64', b64);
+        }
       } catch (blobErr) {
-        formData.append('file', new Blob([file.uri], { type: file.mimeType || 'text/plain' }), file.name);
+        console.error('Fetch blob error:', blobErr);
       }
     }
   } else {
     // Native mobile format
     formData.append('file', {
       uri: file.uri,
-      name: file.name,
-      type: file.mimeType || 'application/octet-stream',
+      name: fileName,
+      type: fileMime,
     });
   }
 
-  if (question) {
-    formData.append('question', question);
+  if (question && question.trim()) {
+    formData.append('question', question.trim());
   }
 
   const res = await fetch(`${BASE_URL}/api/ai/analyze-file`, {

@@ -5,7 +5,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   FlatList,
-  ScrollView,
   TextInput,
   KeyboardAvoidingView,
   Platform,
@@ -51,8 +50,7 @@ export default function AskAIScreen({ navigation, route }) {
   const [input, setInput]               = useState('');
   const [messages, setMessages]         = useState([]);
   const [loading, setLoading]           = useState(false);
-  const [loadingStatus, setLoadingStatus] = useState('');
-  const [attachedFile, setAttachedFile] = useState(null); // { uri, name, mimeType, size, file }
+  const [attachedFile, setAttachedFile] = useState(null); // { uri, name, mimeType, size, file, text }
   const flatListRef = useRef(null);
 
   const hasArticle = Boolean(articleText);
@@ -79,12 +77,29 @@ export default function AskAIScreen({ navigation, route }) {
         return;
       }
 
+      let fileName = asset.name || 'case_document';
+      const mime = asset.mimeType || '';
+      if (!fileName.includes('.')) {
+        if (mime.includes('pdf')) fileName += '.pdf';
+        else if (mime.includes('word') || mime.includes('officedocument')) fileName += '.docx';
+        else if (mime.includes('text')) fileName += '.txt';
+      }
+
+      let extractedText = '';
+      if (asset.file && (fileName.toLowerCase().endsWith('.txt') || mime === 'text/plain')) {
+        try {
+          extractedText = await asset.file.text();
+        } catch (_) {}
+      }
+
       setAttachedFile({
         uri: asset.uri,
-        name: asset.name || 'case_document',
+        name: fileName,
         mimeType: asset.mimeType,
         size: asset.size,
         file: asset.file,
+        base64: asset.base64,
+        text: extractedText,
       });
     } catch (err) {
       Alert.alert('Error', err.message || 'Could not pick a file.');
@@ -93,13 +108,9 @@ export default function AskAIScreen({ navigation, route }) {
 
   const removeAttachment = () => setAttachedFile(null);
 
-  const handleQuickPrompt = (promptText) => {
-    setInput(promptText);
-  };
-
   // ── Send message or analyse file ────────────────────────────
-  const sendMessage = async (overrideText) => {
-    const text = (typeof overrideText === 'string' ? overrideText : input).trim();
+  const sendMessage = async () => {
+    const text = input.trim();
     if (!text && !attachedFile) return;
     if (loading) return;
 
@@ -112,7 +123,6 @@ export default function AskAIScreen({ navigation, route }) {
     }
 
     const fileToSend = attachedFile;
-    const isFileMode = Boolean(fileToSend);
 
     // Build the user bubble label
     const userBubbleText = fileToSend
@@ -125,11 +135,6 @@ export default function AskAIScreen({ navigation, route }) {
     setAttachedFile(null);
 
     setLoading(true);
-    setLoadingStatus(
-      isFileMode
-        ? 'Analyzing case file against Ghana Constitution (1992)...'
-        : 'Consulting the Constitution...'
-    );
 
     try {
       let answer, sources;
@@ -165,7 +170,6 @@ export default function AskAIScreen({ navigation, route }) {
       ]);
     } finally {
       setLoading(false);
-      setLoadingStatus('');
       flatListRef.current?.scrollToEnd({ animated: true });
     }
   };
@@ -291,7 +295,7 @@ export default function AskAIScreen({ navigation, route }) {
                       Upload a case file
                     </Text>
                     <Text style={[styles.uploadHintSub, { color: theme.subText }]}>
-                      PDF or TXT · Compare against 1992 Ghana Constitution
+                      PDF, DOCX, or TXT · Compare against 1992 Ghana Constitution
                     </Text>
                   </View>
                   <Ionicons name="chevron-forward" size={16} color={theme.subText} />
@@ -305,11 +309,8 @@ export default function AskAIScreen({ navigation, route }) {
                 <View style={styles.aiBubbleIcon}>
                   <MaterialCommunityIcons name="robot-outline" size={16} color="#fff" />
                 </View>
-                <View style={[styles.bubble, styles.bubbleAI, styles.loadingBubble, { backgroundColor: theme.card }]}>
+                <View style={[styles.bubble, styles.bubbleAI, { backgroundColor: theme.card }]}>
                   <ActivityIndicator size="small" color={PURPLE} />
-                  <Text style={[styles.loadingStatusText, { color: theme.subText }]}>
-                    {loadingStatus || 'Consulting Constitution...'}
-                  </Text>
                 </View>
               </View>
             ) : null
@@ -320,49 +321,23 @@ export default function AskAIScreen({ navigation, route }) {
           }
         />
 
-        {/* Attached file chip & Quick prompt suggestions */}
+        {/* Attached file chip */}
         {attachedFile && (
-          <View style={{ backgroundColor: theme.card, borderTopWidth: 1, borderTopColor: theme.border }}>
-            <View style={styles.attachmentBar}>
-              <View style={styles.attachmentBadge}>
-                <Ionicons name="document-attach-outline" size={16} color={PURPLE} />
-              </View>
-              <Text style={[styles.attachmentName, { color: theme.text }]} numberOfLines={1}>
-                {attachedFile.name}
-                {attachedFile.size ? `  •  ${formatFileSize(attachedFile.size)}` : ''}
-              </Text>
-              <TouchableOpacity
-                onPress={removeAttachment}
-                accessibilityLabel="Remove attachment"
-                accessibilityRole="button"
-              >
-                <Ionicons name="close-circle" size={20} color={theme.subText} />
-              </TouchableOpacity>
+          <View style={[styles.attachmentBar, { backgroundColor: theme.card, borderTopColor: theme.border }]}>
+            <View style={styles.attachmentBadge}>
+              <Ionicons name="document-attach-outline" size={16} color={PURPLE} />
             </View>
-
-            {/* Quick analysis prompts */}
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.quickPromptRow}
+            <Text style={[styles.attachmentName, { color: theme.text }]} numberOfLines={1}>
+              {attachedFile.name}
+              {attachedFile.size ? `  •  ${formatFileSize(attachedFile.size)}` : ''}
+            </Text>
+            <TouchableOpacity
+              onPress={removeAttachment}
+              accessibilityLabel="Remove attachment"
+              accessibilityRole="button"
             >
-              {[
-                '⚖️ Compare with Constitution',
-                '🛡️ Check Rights & Violations',
-                '📋 Summarize Key Issues',
-                '📜 Cite Relevant Articles',
-              ].map((prompt, idx) => (
-                <TouchableOpacity
-                  key={idx}
-                  style={[styles.quickPromptChip, { backgroundColor: theme.bg, borderColor: theme.border }]}
-                  onPress={() => handleQuickPrompt(prompt)}
-                  accessibilityRole="button"
-                  accessibilityLabel={prompt}
-                >
-                  <Text style={[styles.quickPromptText, { color: theme.text }]}>{prompt}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
+              <Ionicons name="close-circle" size={20} color={theme.subText} />
+            </TouchableOpacity>
           </View>
         )}
 
@@ -500,8 +475,6 @@ const styles = StyleSheet.create({
   bubble: { borderRadius: 16, paddingHorizontal: 14, paddingVertical: 10 },
   bubbleUser: { borderBottomRightRadius: 4 },
   bubbleAI: { borderBottomLeftRadius: 4 },
-  loadingBubble: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  loadingStatusText: { fontSize: 13, fontStyle: 'italic' },
   bubbleText: { fontSize: 14, lineHeight: 21 },
   sourcesWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
   sourcesHeader: { width: '100%', fontSize: 11, fontWeight: '600', marginBottom: 2 },
@@ -524,23 +497,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   attachmentName: { flex: 1, fontSize: 13, fontWeight: '600' },
-
-  quickPromptRow: {
-    flexDirection: 'row',
-    gap: 8,
-    paddingHorizontal: 14,
-    paddingBottom: 10,
-  },
-  quickPromptChip: {
-    borderWidth: 1,
-    borderRadius: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  quickPromptText: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
 
   inputBar: {
     flexDirection: 'row',

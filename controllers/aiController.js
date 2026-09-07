@@ -9,11 +9,12 @@ const Article = require('../models/Article');
 const History = require('../models/History');
 const { findRelevantArticles, toSource } = require('../utils/constitutionSearch');
 const pdfParse = require('pdf-parse');
+const mammoth = require('mammoth');
  
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const MODEL = 'claude-sonnet-4-6';
- 
-async function callClaude(prompt) {
+
+async function callClaude(promptOrContent, options = {}) {
     if (!process.env.ANTHROPIC_API_KEY) {
         const err = new Error('ANTHROPIC_API_KEY is not set in .env');
         err.status = 500;
@@ -29,17 +30,23 @@ async function callClaude(prompt) {
     if (process.env.ANTHROPIC_WORKSPACE_ID) {
         headers['anthropic-workspace-id'] = process.env.ANTHROPIC_WORKSPACE_ID;
     }
- 
+
+    const content = typeof promptOrContent === 'string'
+        ? promptOrContent
+        : promptOrContent;
+
+    const maxTokens = options.max_tokens || (Array.isArray(content) ? 2500 : 1200);
+
     const response = await fetch(ANTHROPIC_URL, {
         method: 'POST',
         headers,
         body: JSON.stringify({
             model: MODEL,
-            max_tokens: 1000,
-            messages: [{ role: 'user', content: prompt }],
+            max_tokens: maxTokens,
+            messages: [{ role: 'user', content }],
         }),
     });
- 
+
     if (!response.ok) {
         const errText = await response.text();
         const requiresWorkspace = response.status === 400 && errText.includes('anthropic-workspace-id');
@@ -50,7 +57,7 @@ async function callClaude(prompt) {
         err.status = requiresWorkspace ? 500 : 502;
         throw err;
     }
- 
+
     const data = await response.json();
     return data.content
         .filter((block) => block.type === 'text')
@@ -249,92 +256,257 @@ function parseTags(raw) {
         .slice(0, 6);
 }
 
-// ── File Analysis ─────────────────────────────────────────────
-// Extracts text from an uploaded file (PDF or plain text) and asks
-// Claude to compare/analyse it against the Ghana Constitution (1992).
+function cleanExtractedText(raw) {
+  if (!raw || typeof raw !== 'string') return '';
+  return raw
+    .replace(/--\s*\d+\s+of\s+\d+\s*--/gi, '') // Remove pdf-parse page counters
+    .replace(/^\s*\d+\s*$/gm, '') // Remove standalone page numbers
+    .trim();
+}
 
-async function extractTextFromFile(file) {
+async function extractTextFromFile(file, buffer) {
   const mime = (file.mimetype || '').toLowerCase();
   const originalName = (file.originalname || '').toLowerCase();
-  const buffer = file.buffer;
+  const buf = buffer || file.buffer;
 
-  if (mime === 'application/pdf' || originalName.endsWith('.pdf')) {
+  if (!buf || buf.length === 0) {
+    return '';
+  }
+
+  // 1. DOCX / DOC (Word Document via mammoth)
+  if (
+    originalName.endsWith('.docx') ||
+    originalName.endsWith('.doc') ||
+    mime.includes('wordprocessingml') ||
+    mime.includes('msword') ||
+    (buf.length > 4 && buf[0] === 0x50 && buf[1] === 0x4B && buf[2] === 0x03 && buf[3] === 0x04)
+  ) {
+    try {
+      const result = await mammoth.extractRawText({ buffer: buf });
+      const docxText = cleanExtractedText(result?.value || '');
+      if (docxText.length > 0) {
+        return docxText;
+      }
+    } catch (docxErr) {
+      console.warn('DOCX extraction attempt failed:', docxErr.message);
+    }
+  }
+
+  // 2. PDF Document text extraction
+  if (
+    mime === 'application/pdf' ||
+    originalName.endsWith('.pdf') ||
+    (buf.length > 4 && buf.slice(0, 4).toString() === '%PDF')
+  ) {
     try {
       if (pdfParse && pdfParse.PDFParse) {
-        const parser = new pdfParse.PDFParse({ data: buffer });
+        const parser = new pdfParse.PDFParse({ data: buf });
         const result = await parser.getText();
         if (typeof parser.destroy === 'function') {
           await parser.destroy().catch(() => {});
         }
-        return (result && result.text ? result.text : '').trim();
+        const text = cleanExtractedText(result && result.text ? result.text : '');
+        return text;
       } else if (typeof pdfParse === 'function') {
-        const result = await pdfParse(buffer);
-        return (result && result.text ? result.text : '').trim();
+        const result = await pdfParse(buf);
+        const text = cleanExtractedText(result && result.text ? result.text : '');
+        return text;
       }
     } catch (pdfErr) {
-      console.error('PDF parsing error:', pdfErr);
-      throw new Error('Could not read PDF content. Please ensure the file is an uncorrupted PDF document.');
+      console.warn('PDF digital text extraction attempt failed:', pdfErr.message);
+      return '';
     }
   }
 
-  // Plain text / Markdown / Text files
+  // 3. Plain text / Markdown / Text files
   try {
-    const text = buffer.toString('utf-8').trim();
-    return text;
+    const text = buf.toString('utf-8').trim();
+    if (!text.includes('\u0000')) {
+      return text;
+    }
   } catch (err) {
-    throw new Error('Could not read text file encoding.');
+    console.warn('UTF-8 text decode failed:', err.message);
   }
+
+  return '';
 }
 
 exports.analyzeFile = async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file was uploaded.' });
+    let buffer = null;
+    let originalName = 'case_document';
+    let mime = '';
+
+    // 1. Resolve buffer and metadata from req.file or req.body.fileBase64
+    if (req.file && req.file.buffer && req.file.buffer.length > 0) {
+      buffer = req.file.buffer;
+      originalName = req.file.originalname || 'case_document';
+      mime = (req.file.mimetype || '').toLowerCase();
+    } else if (req.body && req.body.fileBase64) {
+      let b64 = String(req.body.fileBase64).trim();
+      if (b64.startsWith('data:')) {
+        const commaIdx = b64.indexOf(',');
+        if (commaIdx !== -1) {
+          const meta = b64.slice(0, commaIdx);
+          const match = meta.match(/:(.*?);/);
+          if (match) mime = match[1].toLowerCase();
+          b64 = b64.slice(commaIdx + 1);
+        }
+      }
+      buffer = Buffer.from(b64, 'base64');
+      if (req.body.fileName) originalName = req.body.fileName;
+      if (req.body.fileMime) mime = req.body.fileMime.toLowerCase();
     }
 
-    const { question } = req.body;
-    const fileText = await extractTextFromFile(req.file);
+    const { question, fileText: directText } = req.body || {};
+    const userQuestion = question && String(question).trim()
+      ? String(question).trim()
+      : 'Analyze this case study or legal document and compare it thoroughly with the Constitution of the Republic of Ghana (1992). Cite specific articles where relevant.';
 
-    if (!fileText || fileText.length < 10) {
+    // Check if directText is provided (e.g. from client-side text read)
+    let fileText = directText && String(directText).trim().length > 20 ? String(directText).trim() : '';
+
+    // If buffer exists, detect format
+    const lowerName = originalName.toLowerCase();
+    const isPdf = Boolean(
+      mime === 'application/pdf' ||
+      lowerName.endsWith('.pdf') ||
+      (buffer && buffer.length > 4 && buffer.slice(0, 4).toString() === '%PDF')
+    );
+    const isImage = Boolean(
+      mime.startsWith('image/') ||
+      lowerName.endsWith('.png') ||
+      lowerName.endsWith('.jpg') ||
+      lowerName.endsWith('.jpeg') ||
+      lowerName.endsWith('.webp') ||
+      (buffer && buffer.length > 4 && (
+        (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) ||
+        (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF)
+      ))
+    );
+
+    // Try text extraction if not already provided
+    if (!fileText && buffer && !isImage) {
+      fileText = await extractTextFromFile({ originalname: originalName, mimetype: mime }, buffer);
+    }
+
+    let analysis = '';
+    let usedKeywords = userQuestion;
+
+    // SCENARIO 1: PDF Document where text extraction was minimal or empty (e.g. Scanned Case Study)
+    // Send directly to Claude using native multimodal document support!
+    if (isPdf && (!fileText || fileText.length < 50) && buffer && buffer.length > 0) {
+      console.log(`[analyzeFile] Using Claude native PDF document processing for "${originalName}" (${buffer.length} bytes)...`);
+
+      const base64Pdf = buffer.toString('base64');
+      const messagesContent = [
+        {
+          type: 'document',
+          source: {
+            type: 'base64',
+            media_type: 'application/pdf',
+            data: base64Pdf,
+          },
+        },
+        {
+          type: 'text',
+          text: [
+            'You are Constitut AI, a specialised legal assistant for the Constitution of the Republic of Ghana (1992).',
+            'Carefully read, transcribe (via visual OCR if this is a scanned court document or case study), and analyze the attached PDF.',
+            'Compare the document thoroughly with the Constitution of the Republic of Ghana (1992).',
+            '',
+            'Your response MUST be comprehensive, well-structured, and clearly labeled with these 5 sections:',
+            '1. 📋 SUMMARY: A concise factual overview of the case/document, parties involved, background facts, and key legal claims.',
+            '2. 🏛️ RELEVANT CONSTITUTIONAL PROVISIONS: Specific articles of the 1992 Constitution of Ghana that are engaged (e.g. Chapter 5 Fundamental Human Rights like Article 12, 14, 19, 21, etc., or Articles relating to Executive/Judiciary/Legislature). Always cite specific article numbers.',
+            '3. ⚖️ CONSTITUTIONAL COMPARISON & ANALYSIS: How the case aligns with, departs from, or conflicts with the 1992 Ghana Constitution.',
+            '4. 🛡️ RIGHTS & PROTECTIONS / VIOLATIONS: Highlight any constitutional violations, protections, or guarantees at issue.',
+            '5. 📌 KEY TAKEAWAYS: Objective conclusion and legal takeaways (educational and informative).',
+            '',
+            `User Question / Focus: ${userQuestion}`,
+          ].join('\n'),
+        },
+      ];
+
+      analysis = await callClaude(messagesContent, { max_tokens: 2500 });
+      usedKeywords = `${userQuestion} ${originalName}`;
+    }
+
+    // SCENARIO 2: Image of a case study / court document
+    else if (isImage && buffer && buffer.length > 0) {
+      console.log(`[analyzeFile] Using Claude native image processing for "${originalName}"...`);
+      const imageMime = mime && mime.startsWith('image/') ? mime : (lowerName.endsWith('.png') ? 'image/png' : 'image/jpeg');
+      const base64Img = buffer.toString('base64');
+      const messagesContent = [
+        {
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: imageMime,
+            data: base64Img,
+          },
+        },
+        {
+          type: 'text',
+          text: [
+            'You are Constitut AI, a specialised legal assistant for the Constitution of the Republic of Ghana (1992).',
+            'Carefully read the text in this image (a legal document or case study) and analyze it against the Constitution of Ghana (1992).',
+            '',
+            'Your response MUST include:',
+            '1. 📋 SUMMARY: Factual overview of the case study or document.',
+            '2. 🏛️ RELEVANT CONSTITUTIONAL PROVISIONS: Specific articles of the 1992 Constitution of Ghana that apply. Cite article numbers.',
+            '3. ⚖️ CONSTITUTIONAL COMPARISON & ANALYSIS: Detailed comparison with constitutional principles.',
+            '4. 🛡️ RIGHTS & PROTECTIONS / VIOLATIONS: Highlight any constitutional violations or protections at issue.',
+            '5. 📌 KEY TAKEAWAYS: Objective conclusion and legal takeaways.',
+            '',
+            `User Question / Focus: ${userQuestion}`,
+          ].join('\n'),
+        },
+      ];
+
+      analysis = await callClaude(messagesContent, { max_tokens: 2500 });
+      usedKeywords = `${userQuestion} ${originalName}`;
+    }
+
+    // SCENARIO 3: Digital text extracted from PDF, DOCX, TXT, or sent directly
+    else if (fileText && fileText.length >= 20) {
+      console.log(`[analyzeFile] Using extracted text (${fileText.length} chars) for "${originalName}"...`);
+      // Truncate to ~18 000 chars to stay safely within token limits
+      const truncated = fileText.length > 18000
+        ? fileText.slice(0, 18000) + '\n\n[... document truncated for constitutional analysis ...]'
+        : fileText;
+
+      const prompt = [
+        'You are Constitut AI, a specialised legal assistant for the Constitution of the Republic of Ghana (1992).',
+        'The user has provided the following legal case file or case study document.',
+        'Carefully read and analyze this document, then compare it with the Constitution of the Republic of Ghana (1992).',
+        '',
+        'Your response MUST include:',
+        '1. 📋 SUMMARY: A concise factual overview of the case/document, parties involved, and key claims.',
+        '2. 🏛️ RELEVANT CONSTITUTIONAL PROVISIONS: Specific articles of the 1992 Constitution of Ghana that are engaged (e.g. Chapter 5 Fundamental Human Rights like Article 12, 14, 19, 21, etc.). Always cite article numbers.',
+        '3. ⚖️ CONSTITUTIONAL COMPARISON & ANALYSIS: How the case aligns with, departs from, or conflicts with the 1992 Ghana Constitution.',
+        '4. 🛡️ RIGHTS & PROTECTIONS / VIOLATIONS: Highlight any constitutional violations or protections at issue.',
+        '5. 📌 KEY TAKEAWAYS: Objective conclusion and legal takeaways (educational and informative).',
+        '',
+        '── DOCUMENT / CASE STUDY CONTENT ──',
+        truncated,
+        '── END OF DOCUMENT CONTENT ──',
+        '',
+        `User Question / Focus: ${userQuestion}`,
+      ].join('\n');
+
+      analysis = await callClaude(prompt, { max_tokens: 2500 });
+      usedKeywords = `${userQuestion} ${fileText.slice(0, 600)}`;
+    } else {
       return res.status(400).json({
-        error: 'Could not extract readable text from the uploaded file. Please upload a standard text or PDF document.',
+        error: 'No readable content could be found in the uploaded file. Please ensure the file is not empty or corrupted.',
       });
     }
 
-    // Truncate to ~14 000 chars to stay within token limits
-    const truncated = fileText.length > 14000
-      ? fileText.slice(0, 14000) + '\n\n[... document truncated for constitutional analysis ...]'
-      : fileText;
-
-    const userQuestion = question && String(question).trim()
-      ? String(question).trim()
-      : 'Analyze this case or legal document and compare it with the Constitution of the Republic of Ghana (1992). Cite specific articles where relevant.';
-
-    const prompt = [
-      'You are Constitut AI, a specialised legal assistant for the Constitution of the Republic of Ghana (1992).',
-      'A user has uploaded a case file or legal document. Provide a comprehensive, well-structured constitutional assessment with the following clearly labeled sections:',
-      '',
-      '1. 📋 BRIEF SUMMARY OF DOCUMENT: Key legal facts, parties, claims, or subject matter.',
-      '2. 🏛️ RELEVANT CONSTITUTIONAL PROVISIONS: Specific articles of the Ghana Constitution 1992 that apply (e.g. Chapter 5 Fundamental Human Rights, Police, Judiciary, Legislature, etc.). Always cite specific Article numbers.',
-      '3. ⚖️ CONSTITUTIONAL COMPARISON & ANALYSIS: How the case aligns with, departs from, or conflicts with the 1992 Constitution.',
-      '4. 🛡️ RIGHTS & PROTECTIONS / POTENTIAL VIOLATIONS: Highlight any constitutional guarantees at stake or potential violations.',
-      '5. 📌 KEY TAKEAWAYS: Objective conclusion and legal takeaways (educational and informational; not formal legal counsel).',
-      '',
-      '── UPLOADED DOCUMENT CONTENT ──',
-      truncated,
-      '── END OF DOCUMENT ──',
-      '',
-      `User Question / Focus: ${userQuestion}`,
-    ].join('\n');
-
-    const analysis = await callClaude(prompt);
-
-    // Pull relevant constitution articles based on the file content and query
-    const keywords = userQuestion + ' ' + fileText.slice(0, 600);
-    const sources = findRelevantArticles(keywords).map(toSource);
+    // Retrieve relevant constitution articles
+    const sources = findRelevantArticles(usedKeywords).map(toSource);
 
     res.status(200).json({
-      filename: req.file.originalname,
+      filename: originalName,
       analysis,
       sources,
     });

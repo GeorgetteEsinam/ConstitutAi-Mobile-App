@@ -10,17 +10,8 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB max
   fileFilter: (req, file, cb) => {
-    const allowed = [
-      'application/pdf',
-      'text/plain',
-      'application/msword',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    ];
-    if (allowed.includes(file.mimetype) || file.originalname.match(/\.(pdf|txt|doc|docx)$/i)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only PDF, TXT, DOC and DOCX files are allowed.'));
-    }
+    // Generous filter: accept all common document/image types and octet-streams from mobile/web
+    cb(null, true);
   },
 });
 
