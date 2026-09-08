@@ -15,6 +15,7 @@ const KEYS = {
   SAVED_NOTES:     'app:savedNotes',
   HISTORY_ITEMS:   'app:historyItems',
   QUESTIONS_ASKED: 'app:questionsAsked',
+  ASKED_QUESTIONS_HISTORY: 'app:askedQuestionsHistory',
   USER_NAME:       'app:userName',
   USER_EMAIL:      'app:userEmail',
   USER_PHONE:      'app:userPhone',
@@ -50,6 +51,7 @@ export function AppProvider({ children }) {
   const [savedNotes,     setSavedNotes]           = useState([]);
   const [historyItems,   setHistoryItemsState]    = useState([]);
   const [questionsAsked, setQuestionsAsked]       = useState(0);
+  const [askedQuestionsHistory, setAskedQuestionsHistory] = useState([]);
   const [userName,       setUserNameState]        = useState('');
   const [userEmail,      setUserEmailState]       = useState('');
   const [userPhone,      setUserPhoneState]       = useState('');
@@ -129,7 +131,7 @@ export function AppProvider({ children }) {
   useEffect(() => {
     (async () => {
       const [
-        dm, notif, articles, notes, history, questions,
+        dm, notif, articles, notes, history, questions, questionHistory,
         name, email, phone, obDone,
         token, rToken, uid,
       ] = await Promise.all([
@@ -139,6 +141,7 @@ export function AppProvider({ children }) {
         load(KEYS.SAVED_NOTES,     []),
         load(KEYS.HISTORY_ITEMS,   []),
         load(KEYS.QUESTIONS_ASKED, 0),
+        load(KEYS.ASKED_QUESTIONS_HISTORY, []),
         load(KEYS.USER_NAME,       ''),
         load(KEYS.USER_EMAIL,      ''),
         load(KEYS.USER_PHONE,      ''),
@@ -153,7 +156,8 @@ export function AppProvider({ children }) {
       setSavedArticles(articles);
       setSavedNotes(notes);
       setHistoryItems(history);
-      setQuestionsAsked(questions);
+      setQuestionsAsked(Array.isArray(questionHistory) && questionHistory.length > 0 ? questionHistory.length : questions);
+      setAskedQuestionsHistory(Array.isArray(questionHistory) ? questionHistory : []);
       setUserNameState(name);
       setUserEmailState(email);
       setUserPhoneState(phone);
@@ -229,10 +233,11 @@ export function AppProvider({ children }) {
     setUserNameState('');
     setUserEmailState('');
     setQuestionsAsked(0);
+    setAskedQuestionsHistory([]);
     await AsyncStorage.multiRemove([
       KEYS.AUTH_TOKEN, KEYS.REFRESH_TOKEN, KEYS.USER_ID,
       KEYS.USER_NAME, KEYS.USER_EMAIL,
-      KEYS.QUESTIONS_ASKED,
+      KEYS.QUESTIONS_ASKED, KEYS.ASKED_QUESTIONS_HISTORY,
     ]);
   };
 
@@ -318,6 +323,48 @@ export function AppProvider({ children }) {
     });
   };
 
+  const recordAskedQuestion = (entry) => {
+    const newEntry = {
+      id: entry.id || Date.now().toString(),
+      question: entry.question || '',
+      answer: entry.answer || '',
+      timestamp: entry.timestamp || new Date().toISOString(),
+      sources: Array.isArray(entry.sources) ? entry.sources : [],
+      fileName: entry.fileName || null,
+    };
+
+    setAskedQuestionsHistory((prev) => {
+      const next = [newEntry, ...prev].slice(0, 100);
+      persist(KEYS.ASKED_QUESTIONS_HISTORY, next);
+      return next;
+    });
+
+    setQuestionsAsked((prev) => {
+      const next = prev + 1;
+      persist(KEYS.QUESTIONS_ASKED, next);
+      return next;
+    });
+  };
+
+  const deleteAskedQuestion = (id) => {
+    setAskedQuestionsHistory((prev) => {
+      const next = prev.filter((item) => item.id !== id);
+      persist(KEYS.ASKED_QUESTIONS_HISTORY, next);
+      setQuestionsAsked(next.length);
+      persist(KEYS.QUESTIONS_ASKED, next.length);
+      return next;
+    });
+  };
+
+  const clearQuestionsHistory = async () => {
+    setAskedQuestionsHistory([]);
+    setQuestionsAsked(0);
+    await Promise.all([
+      AsyncStorage.removeItem(KEYS.ASKED_QUESTIONS_HISTORY),
+      AsyncStorage.setItem(KEYS.QUESTIONS_ASKED, '0'),
+    ]);
+  };
+
   const theme = darkMode ? DARK : LIGHT;
 
   // Don't render children until storage is loaded — prevents flash of default values
@@ -361,6 +408,10 @@ export function AppProvider({ children }) {
         // questions
         questionsAsked,
         incrementQuestions,
+        askedQuestionsHistory,
+        recordAskedQuestion,
+        deleteAskedQuestion,
+        clearQuestionsHistory,
       }}
     >
       {children}

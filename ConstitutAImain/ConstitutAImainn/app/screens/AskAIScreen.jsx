@@ -40,16 +40,16 @@ function formatFileSize(bytes) {
 }
 
 export default function AskAIScreen({ navigation, route }) {
-  const { theme, incrementQuestions, authToken } = useAppContext();
-  const articleId   = route.params?.articleId;
+  const { theme, incrementQuestions, recordAskedQuestion, authToken } = useAppContext();
+  const articleId = route.params?.articleId;
   const articleTitle = route.params?.articleTitle;
-  const articleText  = route.params?.articleText;
+  const articleText = route.params?.articleText;
   const articleNumber = route.params?.articleNumber;
-  const chapterTitle  = route.params?.chapterTitle;
+  const chapterTitle = route.params?.chapterTitle;
 
-  const [input, setInput]               = useState('');
-  const [messages, setMessages]         = useState([]);
-  const [loading, setLoading]           = useState(false);
+  const [input, setInput] = useState('');
+  const [messages, setMessages] = useState([]);
+  const [loading, setLoading] = useState(false);
   const [attachedFile, setAttachedFile] = useState(null); // { uri, name, mimeType, size, file, text }
   const flatListRef = useRef(null);
 
@@ -89,7 +89,7 @@ export default function AskAIScreen({ navigation, route }) {
       if (asset.file && (fileName.toLowerCase().endsWith('.txt') || mime === 'text/plain')) {
         try {
           extractedText = await asset.file.text();
-        } catch (_) {}
+        } catch (_) { }
       }
 
       setAttachedFile({
@@ -142,7 +142,7 @@ export default function AskAIScreen({ navigation, route }) {
       if (fileToSend) {
         // ── File analysis mode ──────────────────────────────
         const data = await analyzeFile({ file: fileToSend, question: text || '' }, authToken);
-        answer  = data.analysis;
+        answer = data.analysis;
         sources = data.sources || [];
       } else {
         // ── Regular Q&A mode ────────────────────────────────
@@ -150,11 +150,20 @@ export default function AskAIScreen({ navigation, route }) {
           { question: text, articleId, title: articleTitle, content: articleText },
           authToken
         );
-        answer  = data.answer || 'No response from AI.';
+        answer = data.answer || 'No response from AI.';
         sources = data.sources || [];
       }
 
-      incrementQuestions();
+      if (typeof recordAskedQuestion === 'function') {
+        recordAskedQuestion({
+          question: text || (fileToSend ? `Analyzed file: ${fileToSend.name}` : 'Question'),
+          answer,
+          sources,
+          fileName: fileToSend ? fileToSend.name : null,
+        });
+      } else {
+        incrementQuestions();
+      }
       setMessages((prev) => [
         ...prev,
         { id: `${Date.now()}-ai`, role: 'ai', text: answer, sources },
@@ -368,7 +377,7 @@ export default function AskAIScreen({ navigation, route }) {
                 ? 'Ask about this case file...'
                 : hasArticle
                   ? 'Ask about this article'
-                  : 'Ask anything or upload a case file'
+                  : 'Ask anything'
             }
             placeholderTextColor={theme.subText}
             multiline
